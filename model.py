@@ -65,7 +65,7 @@ class Model(nn.Module):
 			# self.decoder = DecoderModule(x_em, edge_h, gnn_h, gnn_layer, city_num, group_num, device)
 			self.predMLP = Seq(Lin(gnn_h,16),ReLU(inplace=True),Lin(16,1),ReLU(inplace=True))
 			self.tmp_encoder_layer = TransformerEncoderLayer(32, nhead=4, dim_feedforward=256)
-			self.tmp_x_embed = nn.ModuleList([Lin(32*i, x_em) for i in range(1, self.pred_step+1)])
+			self.tmp_x_embed = nn.ModuleList([Seq(Lin(32*i, 256), ReLU(inplace=True), Lin(256, x_em)) for i in range(1, self.pred_step+1)])
 			self.tmp_global_gnn = nn.ModuleList([NodeModel(x_em+gnn_h,1,gnn_h)])
 			for i in range(self.gnn_layer-1):
 				self.tmp_global_gnn.append(NodeModel(gnn_h,1,gnn_h))
@@ -78,7 +78,7 @@ class Model(nn.Module):
 		if self.mode == 'both':
 			self.predMLP = Seq(Lin(gnn_h,16),ReLU(inplace=True),Lin(16,1),ReLU(inplace=True))
 			self.tmp_encoder_layer = TransformerEncoderLayer(32, nhead=4, dim_feedforward=256)
-			self.tmp_x_embed = nn.ModuleList([Lin(32*i, x_em) for i in range(1, self.pred_step+1)])
+			self.tmp_x_embed = nn.ModuleList([Seq(Lin(32*i, 256), ReLU(inplace=True), Lin(256, x_em)) for i in range(1, self.pred_step+1)])
 			self.tmp_global_gnn = nn.ModuleList([NodeModel(x_em+gnn_h,1,gnn_h)])
 			for i in range(self.gnn_layer-1):
 				self.tmp_global_gnn.append(NodeModel(gnn_h,1,gnn_h))
