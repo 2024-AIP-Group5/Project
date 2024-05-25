@@ -19,6 +19,7 @@ class Model(nn.Module):
 		self.mode = mode
 		self.encoder = encoder
 		self.w_init = w_init
+		self.x_em = x_em
 		self.city_num = city_num
 		self.group_num = group_num
 		self.edge_h = edge_h
@@ -62,13 +63,7 @@ class Model(nn.Module):
 
 		####################################################################################################
 		if self.mode == 'feedback':
-			# self.decoder = DecoderModule(x_em, edge_h, gnn_h, gnn_layer, city_num, group_num, device)
-			self.predMLP = Seq(Lin(gnn_h,16),ReLU(inplace=True),Lin(16,1),ReLU(inplace=True))
-			self.tmp_encoder_layer = TransformerEncoderLayer(32, nhead=4, dim_feedforward=256)
-			self.tmp_x_embed = nn.ModuleList([Seq(Lin(32*i, 256), ReLU(inplace=True), Lin(256, x_em)) for i in range(1, self.pred_step+1)])
-			self.tmp_global_gnn = nn.ModuleList([NodeModel(x_em+gnn_h,1,gnn_h)])
-			for i in range(self.gnn_layer-1):
-				self.tmp_global_gnn.append(NodeModel(gnn_h,1,gnn_h))
+			self.predMLP = Seq(Lin(gnn_h, 128), ReLU(inplace=True), Lin(128, 128), ReLU(inplace=True), Lin(128, 1), ReLU(inplace=True))
 		
 		if self.mode == 'temp':
 			self.decoder = DecoderModule(x_em,edge_h,gnn_h,gnn_layer,city_num,group_num,device)
@@ -76,14 +71,12 @@ class Model(nn.Module):
 			self.TemporalAggregateMLP = Seq(Lin(gnn_h+8,gnn_h),ReLU(inplace=True))	
 
 		if self.mode == 'both':
-			self.predMLP = Seq(Lin(gnn_h,16),ReLU(inplace=True),Lin(16,1),ReLU(inplace=True))
-			self.tmp_encoder_layer = TransformerEncoderLayer(32, nhead=4, dim_feedforward=256)
-			self.tmp_x_embed = nn.ModuleList([Seq(Lin(32*i, 256), ReLU(inplace=True), Lin(256, x_em)) for i in range(1, self.pred_step+1)])
-			self.tmp_global_gnn = nn.ModuleList([NodeModel(x_em+gnn_h,1,gnn_h)])
-			for i in range(self.gnn_layer-1):
-				self.tmp_global_gnn.append(NodeModel(gnn_h,1,gnn_h))
+			self.predMLP = Seq(Lin(gnn_h, 128), ReLU(inplace=True), Lin(128, 128), ReLU(inplace=True), Lin(128, 1), ReLU(inplace=True))
 			self.TemporalAggregateMLP = Seq(Lin(gnn_h+8,gnn_h),ReLU(inplace=True))	
-      
+
+		if self.mode == 'test':
+			self.tmp_encoder_layer = TransformerEncoderLayer(32, nhead=4, dim_feedforward=256)
+			self.predMLP = Seq(Lin(gnn_h, 128), ReLU(inplace=True), Lin(128, 128), ReLU(inplace=True), Lin(128, 1), ReLU(inplace=True))
 		####################################################################################################
 
 		if self.mode == 'ag':
@@ -94,19 +87,25 @@ class Model(nn.Module):
 			self.decoder = DecoderModule(x_em,edge_h,gnn_h,gnn_layer,city_num,group_num,device)
 			self.predMLP = Seq(Lin(gnn_h,16),ReLU(inplace=True),Lin(16,self.pred_step),ReLU(inplace=True))			
 
-	def batchInput(self,x,edge_w,edge_index):
+	def batchInput(self, x, edge_w, edge_index):
+		# new_x
 		sta_num = x.shape[1]
-		x = x.reshape(-1,x.shape[-1])
+		x = x.reshape(-1, x.shape[-1])
+
+		# edge_w
 		edge_w = edge_w.reshape(-1,edge_w.shape[-1])
+
+		# edge_index
 		for i in range(edge_index.size(0)):
 			edge_index[i,:] = torch.add(edge_index[i,:], i*sta_num)
-		# print(edge_index.shape)
 		edge_index = edge_index.transpose(0,1)
-		# print(edge_index.shape)
 		edge_index = edge_index.reshape(2,-1)
-		return x, edge_w, edge_index
 
-	def forward(self, x, u, edge_index, edge_w,loc):
+		return x, edge_w, edge_index
+	
+ 
+
+	def forward(self, x, u, edge_index, edge_w, loc):
 		# Shape: (batch, 209, 24, 8)
 		x = x.reshape(-1,x.shape[2],x.shape[3]) # Shape: (209*batch, 24, 8)
 
@@ -115,7 +114,7 @@ class Model(nn.Module):
 			# [S,B,E]
 
 			x = x.transpose(0,1) # Shape: (24, batch*209, 8)
-			x = self.encoder_layer(x) # self-attention Shape: (24, batch*209, 8)
+			x = self.encoder_layer(x) # self-attention, Shape: (24, batch*209, 8)
 			x = x.transpose(0,1) # Shape: (batch*209, 24, 8)
 
 			####################################################################################################	
@@ -151,113 +150,105 @@ class Model(nn.Module):
 		####################################################################################################
 
 
+
 		''' Differentiable grouping network 
 			City to City Group	'''
-		# graph pooling
-		# print(self.w[10])
+		
+		# S
 		w = F.softmax(self.w, dim=1) # w: (209, group_num:15)
 		w1 = w.transpose(0, 1)
 		w1 = w1.unsqueeze(dim=0)
 		w1 = w1.repeat_interleave(x.size(0), dim=0) # w1: (batch, group_num, 209)
-		# print("w1: ", w1.shape)
 
-
+		# city group 
 		loc = self.loc_embed(loc) # Linear(2, loc_em:12), shape: (batch, 209, 12)
 		x_loc = torch.cat([x,loc],dim=-1) # X, L (batch, 32+12=44)
-		# Z 
 		g_x = torch.bmm(w1,x_loc) # g_x: (batch, group_num, 44)
-		# print("g_x: ", g_x.shape)
+
 
 
 		''' Group Correlation Encoding Module 
 			Edge Connection '''
-		# group gnn
+
 		# T
 		u_em1 = self.u_embed1(u[:,0]) # Embedding(12, date_em=4) Shape: (batch, 209, 4)
 		u_em2 = self.u_embed2(u[:,1]) # Embedding(7, date_em=4)
 		u_em3 = self.u_embed3(u[:,2]) # Embedding(24, date_em=4)
 		u_em = torch.cat([u_em1,u_em2,u_em3],dim=-1) # Shape: (batch, 209, 12)
-		# print("u_em: ", u_em.shape)
 
+		# Edge connection
 		for i in range(self.group_num):
 			for j in range(self.group_num):
 				if i == j: continue
 
 				# ReLU(enc(Z_i, Z_j, T))
-				g_edge_input = torch.cat([g_x[:,i],g_x[:,j],u_em],dim=-1) # Shape: (batch, 209, 44+44+12)
-				tmp_g_edge_w = self.edge_inf(g_edge_input) # Linear(..., edge_h=12) + ReLU(), Shape: (batch, 209, 12)
+				g_edge_input = torch.cat([g_x[:,i],g_x[:,j],u_em],dim=-1) # Shape: (batch, 44+44+12=100)
+				tmp_g_edge_w = self.edge_inf(g_edge_input) # Shape: (batch, 12)
 
 				tmp_g_edge_w = tmp_g_edge_w.unsqueeze(dim=0) # Shape: (1, batch, 209, 12)
 				tmp_g_edge_index = torch.tensor([i,j]).unsqueeze(dim=0).to(self.device,non_blocking=True) # Shape: (1, 2)
 
 				if i == 0 and j == 1:
-					g_edge_w = tmp_g_edge_w
-					g_edge_index = tmp_g_edge_index
+					g_edge_w = tmp_g_edge_w # Shape: (1, batch, 12)
+					g_edge_index = tmp_g_edge_index # Shape: (1, 2)
 				else:
-					g_edge_w = torch.cat([g_edge_w,tmp_g_edge_w],dim=0)
-					g_edge_index = torch.cat([g_edge_index,tmp_g_edge_index],dim=0)
+					g_edge_w = torch.cat([g_edge_w,tmp_g_edge_w],dim=0) # Shape: (210, batch, 12)
+					g_edge_index = torch.cat([g_edge_index,tmp_g_edge_index],dim=0) # Shape: (210, 2)
 
 
 
-		''' Update '''
-		# print(g_edge_w.shape,g_edge_index.shape)
+
+		''' Group Message Passing
+  			Group Update '''
+
 		g_edge_w = g_edge_w.transpose(0,1)
 		g_edge_index = g_edge_index.unsqueeze(dim=0)
 		g_edge_index = g_edge_index.repeat_interleave(u_em.shape[0],dim=0)
 		g_edge_index = g_edge_index.transpose(1,2)
-		# print(g_x.shape,g_edge_w.shape,g_edge_index.shape)
 		g_x, g_edge_w, g_edge_index = self.batchInput(g_x, g_edge_w, g_edge_index)
-		# print(g_x.shape,g_edge_w.shape,g_edge_index.shape)
+
 		for i in range(self.gnn_layer):
 			g_x = self.group_gnn[i](g_x,g_edge_index,g_edge_w)
 		
 		g_x = g_x.reshape(-1,self.group_num,g_x.shape[-1])
-		# print(g_x.shape,self.w.shape)
 		
 
 
 		''' City Group to City '''
+
+		####################################################################################################	
 		# S
 		w2 = w.unsqueeze(dim=0)
 		w2 = w2.repeat_interleave(g_x.size(0), dim=0)
-		# H
-		new_x = torch.bmm(w2, g_x) # Shape: (batch:64, 209, 32)
+		new_x = torch.bmm(w2, g_x) # Shape: (batch, 209, 32)
 
-		####################################################################################################	
-		# H'
-		# new_x = torch.cat([x,new_x],dim=-1) # Shape: (batch:64, 209, 64) 
 
 		if self.mode == 'both':
-			x2 = x2.reshape(-1,x2.shape[-1])
-
 			# x Shape: (batch:64, 209, 32)
-			outputs = x.reshape(-1, x.shape[-1]) # Shape: (batch*209, 32)
-			outputs = outputs.unsqueeze(0) # Shape: (1, batch*209, 32)
-
+			x2 = x2.reshape(-1,x2.shape[-1])
+			edge_w = edge_w.unsqueeze(dim=-1)
 
 			for i in range(self.pred_step):
 				
-				# feedback
-				tmp_output = self.tmp_encoder_layer(outputs) # Shape: (i+1, batch*209, 32)
-				tmp_output = tmp_output.transpose(0, 1) # Shape: (batch*209, i+1, 32)
-				tmp_output = tmp_output.reshape(-1, self.city_num, (i+1)*tmp_output.shape[-1]) # Shape: (batch, 209, (i+1)*32)
-				tmp_output = self.tmp_x_embed[i](tmp_output) # Shape: (batch, 209, 32)
-				new_x_cat = torch.cat([tmp_output, new_x], dim=-1) # Shape: (batch, 209, 64)
+				""" Feedback """
+				# x Shape: (batch, 209, 32)
+				new_x = torch.cat([x, new_x], dim=-1) # Shape: (batch, 209, 64)
 
-				# Update
-				tmp_edge_w = edge_w.unsqueeze(dim=-1)
+
+				""" City Update """
 				tmp_edge_index = edge_index.clone()
-				new_x_cat, tmp_edge_w, tmp_edge_index = self.batchInput(new_x_cat, tmp_edge_w, tmp_edge_index) # Shape: (batch*209, 64)
+				new_x, tmp_edge_w, tmp_edge_index = self.batchInput(new_x, edge_w, tmp_edge_index) # Shape: (batch*209, 64)
 
 				for j in range(self.gnn_layer):
-					new_x_cat = self.tmp_global_gnn[j](new_x_cat ,tmp_edge_index, tmp_edge_w) # Shape: (batch*209, 32)
+					new_x = self.global_gnn[j](new_x, tmp_edge_index, tmp_edge_w) # Shape: (batch*209, 32)
+
+				""" Temporal """
+				temp_x = torch.cat([x2, new_x],dim=-1)
+				temp_x = self.TemporalAggregateMLP(temp_x)
 				
-				new_x_cat = torch.cat([x2,new_x_cat],dim=-1)
-				new_x_cat = self.TemporalAggregateMLP(new_x_cat)
-				
-				# Final Forcasting
-				# new_x_cat = self.decoder(new_x_cat, self.w, g_edge_index, g_edge_w, tmp_edge_index, tmp_edge_w)
-				tmp_res = self.predMLP(new_x_cat) # Shape: (batch*209, 1)
+				""" Final Forcasting """
+				# new_x = self.decoder(new_x, self.w, g_edge_index, g_edge_w, tmp_edge_index, tmp_edge_w)
+				tmp_res = self.predMLP(temp_x) # Shape: (batch*209, 1)
 				tmp_res = tmp_res.reshape(-1, self.city_num) # Shape: (batch, 209)
 				tmp_res = tmp_res.unsqueeze(dim=-1) # Shape: (batch, 209, 1)
 				if i == 0:
@@ -265,55 +256,52 @@ class Model(nn.Module):
 				else:
 					res = torch.cat([res,tmp_res],dim=-1) # Shape: (batch, 209, i+1)
 
-				new_x_cat = new_x_cat.unsqueeze(0)
-				outputs = torch.cat([outputs, new_x_cat], dim=0) # Shape: (i+2, batch*209, 32)
+				new_x = new_x.reshape(-1, self.city_num, self.x_em) # Shape: (batch, 209, 32)
+
 
 		if self.mode == 'temp':
+			""" City Update """
 			new_x = torch.cat([x,new_x],dim=-1)
 			edge_w = edge_w.unsqueeze(dim=-1)
-			# print(new_x.shape,edge_w.shape,edge_index.shape)
 			new_x, edge_w, edge_index = self.batchInput(new_x, edge_w, edge_index)
-			# print(new_x.shape,edge_w.shape,edge_index.shape)
+			
 			for i in range(self.gnn_layer):
 				new_x = self.global_gnn[i](new_x,edge_index,edge_w)
-			# print(new_x.shape)
 
+			""" Temporal """
 			x2 = x2.reshape(-1,x2.shape[-1])
 			new_x = torch.cat([x2,new_x],dim=-1)
 			new_x = self.TemporalAggregateMLP(new_x)
 
-			# Final Forcasting
+			""" Final Forcasting """
 			new_x = self.decoder(new_x, self.w, g_edge_index, g_edge_w, edge_index, edge_w) # Shape: (batch*209, 32)
 			res = self.predMLP(new_x)
 			res = res.reshape(-1,self.city_num,self.pred_step) # Shape: (batch, 209, 6)
 
 
-		if self.mode == 'feedback':
-			# x Shape: (batch:64, 209, 32)
-			outputs = x.reshape(-1, x.shape[-1]) # Shape: (batch*209, 32)
-			outputs = outputs.unsqueeze(0) # Shape: (1, batch*209, 32)
 
+		if self.mode == 'feedback':
+			edge_w = edge_w.unsqueeze(dim=-1)
 
 			for i in range(self.pred_step):
 				
-				# feedback
-				tmp_output = self.tmp_encoder_layer(outputs) # Shape: (i+1, batch*209, 32)
-				tmp_output = tmp_output.transpose(0, 1) # Shape: (batch*209, i+1, 32)
-				tmp_output = tmp_output.reshape(-1, self.city_num, (i+1)*tmp_output.shape[-1]) # Shape: (batch, 209, (i+1)*32)
-				tmp_output = self.tmp_x_embed[i](tmp_output) # Shape: (batch, 209, 32)
-				new_x_cat = torch.cat([tmp_output, new_x], dim=-1) # Shape: (batch, 209, 64)
+				""" Feedback """
+				# x Shape: (batch, 209, 32)
+				new_x = torch.cat([x, new_x], dim=-1) # Shape: (batch, 209, 64)
 
-				# Update
-				tmp_edge_w = edge_w.unsqueeze(dim=-1)
+
+				""" City Update """
 				tmp_edge_index = edge_index.clone()
-				new_x_cat, tmp_edge_w, tmp_edge_index = self.batchInput(new_x_cat, tmp_edge_w, tmp_edge_index) # Shape: (batch*209, 64)
+				new_x, tmp_edge_w, tmp_edge_index = self.batchInput(new_x, edge_w, tmp_edge_index) # Shape: (batch*209, 64)
 
 				for j in range(self.gnn_layer):
-					new_x_cat = self.tmp_global_gnn[j](new_x_cat ,tmp_edge_index, tmp_edge_w) # Shape: (batch*209, 32)
+					new_x = self.global_gnn[j](new_x, tmp_edge_index, tmp_edge_w) # Shape: (batch*209, 32)
 				
-				# Final Forcasting
-				# new_x_cat = self.decoder(new_x_cat, self.w, g_edge_index, g_edge_w, tmp_edge_index, tmp_edge_w)
-				tmp_res = self.predMLP(new_x_cat) # Shape: (batch*209, 1)
+
+				
+				""" Final Forcasting """
+				# new_x = self.decoder(new_x, self.w, g_edge_index, g_edge_w, tmp_edge_index, tmp_edge_w)
+				tmp_res = self.predMLP(new_x) # Shape: (batch*209, 1)
 				tmp_res = tmp_res.reshape(-1, self.city_num) # Shape: (batch, 209)
 				tmp_res = tmp_res.unsqueeze(dim=-1) # Shape: (batch, 209, 1)
 				if i == 0:
@@ -321,20 +309,52 @@ class Model(nn.Module):
 				else:
 					res = torch.cat([res,tmp_res],dim=-1) # Shape: (batch, 209, i+1)
 
-				new_x_cat = new_x_cat.unsqueeze(0)
-				outputs = torch.cat([outputs, new_x_cat], dim=0) # Shape: (i+2, batch*209, 32)
+				new_x = new_x.reshape(-1, self.city_num, self.x_em) # Shape: (batch, 209, 32)
+
 		
+		if self.mode == 'test':
+			""" City Update """
+			new_x = torch.cat([x,new_x],dim=-1) # Shape: (batch, 209, 64) 
+			edge_w = edge_w.unsqueeze(dim=-1)
+			new_x, edge_w, edge_index = self.batchInput(new_x, edge_w, edge_index)
+			# new_x Shape: (batch, 209, 64) -> (batch*209, 64)
+			# edge_w Shape: (batch, 4112) -> (batch*4112, 1)
+			# edge_index Shape: (batch, 2, 4112) -> (2, batch*4112)
+
+			for i in range(self.gnn_layer):
+				new_x = self.global_gnn[i](new_x, edge_index, edge_w) # Shape: (batch*209, 32)
+
+
+			""" Final Forcasting """
+			outputs = new_x.unsqueeze(dim=0) # Shape: (1, batch*209, 32)
+
+			for i in range(self.pred_step):
+				new_x_attn = self.tmp_encoder_layer(outputs) # Shape: (i+1, batch*209, 32)
+				new_x_attn = new_x_attn[-1] # Shape: (batch*209, 32)
+
+				tmp_res = self.predMLP(new_x_attn) # Shape: (batch*209, 1)
+				tmp_res = tmp_res.reshape(-1, self.city_num) # Shape: (batch, 209)
+				tmp_res = tmp_res.unsqueeze(dim=-1) # Shape: (batch, 209, 1)
+				if i == 0:
+					res = tmp_res
+				else:
+					res = torch.cat([res,tmp_res],dim=-1) # Shape: (batch, 209, i+1)
+
+				new_x_attn = new_x_attn.unsqueeze(0)
+				outputs = torch.cat([outputs, new_x_attn], dim=0) # Shape: (i+2, batch*209, 32)
+
 
 		if self.mode == 'ag':
+			""" City Update """
 			new_x = torch.cat([x,new_x],dim=-1) # Shape: (batch:64, 209, 64) 
-			# Update
 			edge_w = edge_w.unsqueeze(dim=-1)
 			new_x, edge_w, edge_index = self.batchInput(new_x, edge_w, edge_index)
 
 			for i in range(self.gnn_layer):
 				new_x = self.global_gnn[i](new_x,edge_index,edge_w)
 
-			# Final Forcasting
+
+			""" Final Forcasting """
 			for i in range(self.pred_step):
 				new_x = self.decoder(new_x, self.w, g_edge_index, g_edge_w, edge_index, edge_w)
 				tmp_res = self.predMLP(new_x)
@@ -344,18 +364,23 @@ class Model(nn.Module):
 					res = tmp_res
 				else:
 					res = torch.cat([res,tmp_res],dim=-1)
+
+
 		
 		if self.mode == 'full':
-			new_x = torch.cat([x,new_x],dim=-1) # Shape: (batch:64, 209, 64) 
-			# Update
+			""" City Update """
+			new_x = torch.cat([x,new_x],dim=-1) # Shape: (batch, 209, 64) 
 			edge_w = edge_w.unsqueeze(dim=-1)
 			new_x, edge_w, edge_index = self.batchInput(new_x, edge_w, edge_index)
+			# new_x Shape: (batch, 209, 64) -> (batch*209, 64)
+			# edge_w Shape: (batch, 4112) -> (batch*4112, 1)
+			# edge_index Shape: (batch, 2, 4112) -> (2, batch*4112)
 
 			for i in range(self.gnn_layer):
-				new_x = self.global_gnn[i](new_x,edge_index,edge_w) # Shape: (batch*209, 32)
+				new_x = self.global_gnn[i](new_x, edge_index, edge_w) # Shape: (batch*209, 32)
 
 
-			# Final Forcasting
+			""" Final Forcasting """
 			new_x = self.decoder(new_x, self.w, g_edge_index, g_edge_w, edge_index, edge_w) # Shape: (batch*209, 32)
 			res = self.predMLP(new_x)
 			res = res.reshape(-1,self.city_num,self.pred_step) # Shape: (batch, 209, 6)

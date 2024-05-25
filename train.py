@@ -11,6 +11,7 @@ from sklearn.cluster import KMeans
 from model import Model
 from dataset import trainDataset,valDataset,testDataset
 import argparse
+from tqdm import tqdm
 
 parser = argparse.ArgumentParser(description='Multi-city AQI forecasting')
 parser.add_argument('--device',type=str,default='cuda',help='')
@@ -33,21 +34,25 @@ parser.add_argument('--edge_h',type=int,default=12,help='edge h')
 parser.add_argument('--lr',type=float,default=0.001,help='lr')
 parser.add_argument('--wd',type=float,default=0.001,help='weight decay')
 parser.add_argument('--pred_step',type=int,default=6,help='step')
+parser.add_argument('--data_usage',type=float,default=1.0,help='')
+parser.add_argument('--test',type=str,default='',help='')
 args = parser.parse_args()
 print(args)
 
 
-########################################################################################################################	
-print("Preparing Training Dataset")
 train_dataset = trainDataset()
-print("Preparing Val Dataset")
 val_dataset = valDataset()
-print("Preparing Test Dataset")
 test_dataset = testDataset()
-########################################################################################################################	
 
+# print(len(train_dataset)+len(val_dataset)+len(test_dataset))
+train_p = list(range(0, int(len(train_dataset)*args.data_usage)))
+val_p = list(range(0, int(len(val_dataset)*args.data_usage)))
+test_p = list(range(0, int(len(test_dataset)*args.data_usage)))
 
-print(len(train_dataset)+len(val_dataset)+len(test_dataset))
+train_dataset = Data.Subset(train_dataset, train_p)
+val_dataset = Data.Subset(val_dataset, val_p)
+test_dataset = Data.Subset(test_dataset, test_p)
+
 train_loader = Data.DataLoader(train_dataset, batch_size=args.batch_size,
     shuffle=True, num_workers=8, pin_memory=True)
 val_loader = Data.DataLoader(val_dataset, batch_size=args.batch_size,
@@ -75,11 +80,9 @@ for _ in range(args.run_times):
 		w = torch.FloatTensor(w).to(device,non_blocking=True)
 
 
-	########################################################################################################################	
 	city_model = Model(args.mode, args.encoder, args.w_init, w, args.x_em, args.date_em, args.loc_em, args.edge_h, args.gnn_h,
 			args.gnn_layer, args.city_num, args.group_num, args.pred_step, device).to(device)
 	print("Model Created")
-	########################################################################################################################	
 
 
 	city_num = sum(p.numel() for p in city_model.parameters() if p.requires_grad)
@@ -87,9 +90,7 @@ for _ in range(args.run_times):
 
 	# print(city_model)
 
-	########################################################################################################################	
 	criterion = nn.L1Loss(reduction = 'sum')
-	########################################################################################################################	
 
 	all_params = city_model.parameters()
 	w_params = []
@@ -102,20 +103,20 @@ for _ in range(args.run_times):
 	# print(len(w_params),len(other_params))
 
 
-	########################################################################################################################	
 	optimizer = torch.optim.Adam([
         {'params': other_params},
         {'params': w_params, 'lr': args.lr * args.w_rate}
     ], lr=args.lr, weight_decay=args.wd)
-	########################################################################################################################	
 
 	val_loss_min = np.inf
 
 
-
+	train_losses = np.zeros((args.epoch)) 
+	val_losses = np.zeros((args.epoch)) 
 	########################################################################################################################	
 	for epoch in range(args.epoch):
-		for i,data in enumerate(train_loader):
+		train_loss = 0
+		for i,data in enumerate(tqdm(train_loader)):
 			data = [item.to(device,non_blocking=True) for item in data]
 			x,u,y,edge_index,edge_w,loc = data
 
@@ -125,24 +126,51 @@ for _ in range(args.run_times):
 			loss.backward()
 			optimizer.step()
 
-			if i % 100 == 0:
-				print('Epoch [{}/{}], Step [{}/{}], Loss: {:.4f}'
-						.format(epoch, args.epoch, i, int(len(train_dataset)/args.batch_size), loss.item()))
+			train_loss += loss.item()
 
-		if epoch % 5 == 0:
-			with torch.no_grad():
-				val_loss = 0
-				for j, data_val in enumerate(val_loader):
-					data_val = [item.to(device,non_blocking=True) for item in data_val]
-					x_val,u_val,y_val,edge_index_val,edge_w_val,loc_val = data_val
-					outputs_val = city_model(x_val,u_val,edge_index_val,edge_w_val,loc_val)
-					batch_loss = criterion(y_val,outputs_val)
-					val_loss += batch_loss.item()
-				print('Epoch:',epoch,', val_loss:',val_loss)
-				if val_loss < val_loss_min:
-					torch.save(city_model.state_dict(),args.encoder+'_para_'+args.mark+'.ckpt')
-					val_loss_min = val_loss
-					print('parameters have been updated during epoch ',epoch)
+			# if i % 100 == 0:
+			# 	losses.append(loss.item())
+			# 	print('Epoch [{}/{}], Step [{}/{}], Loss: {:.4f}'
+			# 			.format(epoch+1, args.epoch, i, int(len(train_dataset)/args.batch_size), loss.item()))
+
+
+
+   
+		with torch.no_grad():
+			val_loss = 0
+			for j, data_val in enumerate(val_loader):
+				data_val = [item.to(device,non_blocking=True) for item in data_val]
+				x_val,u_val,y_val,edge_index_val,edge_w_val,loc_val = data_val
+				outputs_val = city_model(x_val,u_val,edge_index_val,edge_w_val,loc_val)
+				batch_loss = criterion(y_val,outputs_val)
+				val_loss += batch_loss.item()
+			if val_loss < val_loss_min:
+				torch.save(city_model.state_dict(),args.encoder+'_para_'+args.mark+'.ckpt')
+				val_loss_min = val_loss
+		
+
+		print(f'Epoch [{epoch+1}/{args.epoch}], Train_Loss: {train_loss/len(train_dataset):.4f}, Val_Loss: {val_loss/len(val_dataset):.4f}')
+
+		# Save results
+		train_losses[epoch] = train_loss/len(train_dataset)
+		val_losses[epoch] = val_loss/len(val_dataset)
+		np.savetxt(f"./result/trainLoss_{args.mode+args.test}_epoch_{args.epoch}", train_losses)
+		np.savetxt(f"./result/valLoss_{args.mode+args.test}_epoch_{args.epoch}", val_losses)
+
+		# if epoch % 5 == 0:
+		# 	with torch.no_grad():
+		# 		val_loss = 0
+		# 		for j, data_val in enumerate(val_loader):
+		# 			data_val = [item.to(device,non_blocking=True) for item in data_val]
+		# 			x_val,u_val,y_val,edge_index_val,edge_w_val,loc_val = data_val
+		# 			outputs_val = city_model(x_val,u_val,edge_index_val,edge_w_val,loc_val)
+		# 			batch_loss = criterion(y_val,outputs_val)
+		# 			val_loss += batch_loss.item()
+		# 		print('Epoch:',epoch,', val_loss:',val_loss)
+		# 		if val_loss < val_loss_min:
+		# 			torch.save(city_model.state_dict(),args.encoder+'_para_'+args.mark+'.ckpt')
+		# 			val_loss_min = val_loss
+		# 			print('parameters have been updated during epoch ',epoch)
 	########################################################################################################################	
 
 
@@ -162,10 +190,10 @@ for _ in range(args.run_times):
 
 	with torch.no_grad():
 		city_model.load_state_dict(torch.load(args.encoder+'_para_'+args.mark+'.ckpt'))
-		w_weight = city_model.state_dict()['w']
-		w_weight = F.softmax(w_weight)
-		_,w_weight = torch.max(w_weight,dim=-1)
-		print(w_weight.cpu().tolist())
+		# w_weight = city_model.state_dict()['w']
+		# w_weight = F.softmax(w_weight)
+		# _,w_weight = torch.max(w_weight,dim=-1)
+		# print(w_weight.cpu().tolist())
 
 		for i, data in enumerate(test_loader):
 			data = [item.to(device,non_blocking=True) for item in data]
@@ -183,9 +211,14 @@ for _ in range(args.run_times):
 
 		mae_loss = mae_loss.cpu()
 		rmse_loss = rmse_loss.cpu()
+		mae_loss = np.array(mae_loss)
+		rmse_loss = np.sqrt(np.array(rmse_loss))
 
-		print('mae:', np.array(mae_loss))
-		print('rmse:', np.sqrt(np.array(rmse_loss)))
+		print('mae:', mae_loss)
+		print('rmse:', rmse_loss)
+
+		np.savetxt(f"./result/maeLoss_{args.mode+args.test}_epoch_{args.epoch}", mae_loss)
+		np.savetxt(f"./result/rmseLoss_{args.mode+args.test}_epoch_{args.epoch}", rmse_loss)
 
 		# for i, data in enumerate(Data.DataLoader(test_dataset, batch_size=1,shuffle=False, pin_memory=True)):
 		# 	data = [item.to(device,non_blocking=True) for item in data]
@@ -194,9 +227,3 @@ for _ in range(args.run_times):
 		# 	if i == 305:
 		# 		print(x[:,0])		
 		# 		print(outputs[:,0])
-
-
-
-
-
-
