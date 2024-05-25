@@ -139,13 +139,22 @@ class Model(nn.Module):
 			x2 = torch.index_select(x2, dim=2, index=torch.tensor([3, 7, 11, 15, 19, 23]).to('cuda')) ## ( batch size, num of city, selected 6h, 8features )
 			x2 = x2.transpose(1,2) ## ( batch size, selected 6h , num of city, 8features ) [batch size, 6, 209, 8]
 
-			h24 = x2[:, -1:, :, :]  # [batch size, 1, 209, 8]
 			h_other5 = x2[:, :-1, :, :]  # [batch size, 5, 209, 8]
+			h_other5 = h_other5.reshape(-1,h_other5.shape[1]*h_other5.shape[2],h_other5.shape[3])  # [batch size, 1045, 8]
 
-			attention_scores = torch.einsum('bijk,bljk->bijl', h_other5, h24)  # [batch size, 5, 209, 209]
+			h24 = x2[:, -1:, :, :]  # [batch size, 1, 209, 8]
+			h24 = h24.reshape(-1,h24.shape[2],h24.shape[3]) # [batch size, 209, 8]
+			h24 = h24.transpose(1,2)
+
+			attention_scores = torch.matmul(h_other5, h24)   # [batch size, 1045, 209]
+			attention_scores = attention_scores.reshape(-1,5,209,attention_scores.shape[2])  # [batch size, 5, 209, 209]
 			attention_weights = F.softmax(attention_scores, dim=1)  # [batch size, 5, 209, 209]
 
-			attention_weighted_sum = torch.einsum('bijk,bijl->bijk', h_other5, attention_weights)  # [batch size, 5, 209, 8]
+			h_other5 = h_other5.reshape(-1,5,209,h_other5.shape[2]) # [batch size, 5, 209, 8]
+			h_other5 = h_other5.transpose(2,3) # [batch size, 5, 8, 209]
+
+			attention_weighted_sum = torch.matmul(h_other5, attention_weights) # [batch size, 5, 8, 209]
+			attention_weighted_sum = attention_weighted_sum.transpose(2,3)
 			x2 = torch.sum(attention_weighted_sum, dim=1)  # [batch size, 209, 8]
 		####################################################################################################
 
