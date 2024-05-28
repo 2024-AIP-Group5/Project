@@ -154,8 +154,8 @@ for _ in range(args.run_times):
 		# Save results
 		train_losses[epoch] = train_loss/len(train_dataset)
 		val_losses[epoch] = val_loss/len(val_dataset)
-		np.savetxt(f"./result/trainLoss_{args.mode+args.test}_epoch_{args.epoch}", train_losses)
-		np.savetxt(f"./result/valLoss_{args.mode+args.test}_epoch_{args.epoch}", val_losses)
+		np.savetxt(f"./result/trainLoss_{args.mode+args.test}_epoch_{args.epoch}_dataUsage_{args.data_usage}", train_losses)
+		np.savetxt(f"./result/valLoss_{args.mode+args.test}_epoch_{args.epoch}_dataUsage_{args.data_usage}", val_losses)
 
 		# if epoch % 5 == 0:
 		# 	with torch.no_grad():
@@ -217,8 +217,8 @@ for _ in range(args.run_times):
 		print('mae:', mae_loss)
 		print('rmse:', rmse_loss)
 
-		np.savetxt(f"./result/maeLoss_{args.mode+args.test}_epoch_{args.epoch}", mae_loss)
-		np.savetxt(f"./result/rmseLoss_{args.mode+args.test}_epoch_{args.epoch}", rmse_loss)
+		np.savetxt(f"./result/maeLoss_{args.mode+args.test}_epoch_{args.epoch}_dataUsage_{args.data_usage}", mae_loss)
+		np.savetxt(f"./result/rmseLoss_{args.mode+args.test}_epoch_{args.epoch}_dataUsage_{args.data_usage}", rmse_loss)
 
 		# for i, data in enumerate(Data.DataLoader(test_dataset, batch_size=1,shuffle=False, pin_memory=True)):
 		# 	data = [item.to(device,non_blocking=True) for item in data]
