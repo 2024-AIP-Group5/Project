@@ -196,6 +196,7 @@ class Model(nn.Module):
 
 		if self.mode == 'temp' or self.mode == 'both':
 			x2 = x.reshape(-1,self.city_num,x.shape[1],x.shape[2]) # Temporal
+			x2 = torch.index_select(x2, dim=2, index=torch.tensor([3, 7, 11, 15, 19, 23]).to(self.device)) ## ( batch size, num of city, selected 6h, 8features )
 			x2 = x2.transpose(1,2) ## ( batch size, selected 6h , num of city, 8features ) [batch size, 6, 209, 8]
 
 			h_other5 = x2[:, :-1, :, :]  # [batch size, 5, 209, 8]
